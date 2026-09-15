@@ -23,10 +23,14 @@ const Context = @import("context.zig");
 const Seat = @import("seat.zig");
 const Output = @import("output.zig");
 const ShellSurface = @import("shell_surface.zig");
+const Status = @import("status.zig");
 
 const ctx = Context.get();
 const color_pattern = mvzr.compile("\\^#([0-9a-zA-Z]{8}|!)").?;
-pub var status_buffer = [1]u8 { 0 } ** 256;
+
+/// Framed by `Status`, so this is always exactly one complete status line -
+/// never a fragment, whatever size the writer's line is or how it is chunked.
+pub var status_reader: Status = .{};
 
 font: render_.Font = undefined,
 
@@ -650,7 +654,7 @@ fn render_dynamic_component(self: *Self) void {
             u8,
             switch (area.data) {
                 .text => |text| text,
-                else => mem.span(@as([*:0]const u8, @ptrCast(&status_buffer))),
+                else => status_reader.text(),
             },
             "\n ",
         );

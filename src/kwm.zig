@@ -124,3 +124,10 @@ fn read(comptime T: type, fd: posix.fd_t) !?T {
     if (nbytes != @sizeOf(T)) return null;
     return data;
 }
+
+
+test {
+    // `zig build test` only collects tests from files the root has a reason to
+    // analyse, so a file carrying its own tests has to be named here.
+    _ = @import("kwm/status.zig");
+}

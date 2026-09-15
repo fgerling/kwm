@@ -438,22 +438,39 @@ pub fn update_bar_status(self: *Self) void {
         if (self.bar_status_fd) |fd| {
             log.debug("update status", .{});
 
-            const dest_buf = &@import("bar.zig").status_buffer;
-            const nbytes = posix.read(fd, dest_buf) catch |err| {
-                switch (err) {
-                    error.WouldBlock => log.debug("no data in fd {}", .{ fd }),
-                    else => log.err("read data from fd {} failed: {}", .{ fd, err }),
+            const reader = &@import("bar.zig").status_reader;
+            var chunk: [4096]u8 = undefined;
+            var updated = false;
+            var closed = false;
+
+            // Both sources are non-blocking, so drain what is queued instead of
+            // leaving a second line for the next wake. The reader frames on
+            // newlines, so this is tidiness rather than correctness - which is
+            // the point: a read boundary is no longer allowed to mean anything.
+            while (true) {
+                const nbytes = posix.read(fd, &chunk) catch |err| {
+                    switch (err) {
+                        error.WouldBlock => log.debug("no more data in fd {}", .{ fd }),
+                        else => log.err("read data from fd {} failed: {}", .{ fd, err }),
+                    }
+                    break;
+                };
+
+                log.debug("read {} bytes data from fd {}", .{ nbytes, fd });
+
+                if (nbytes == 0) {
+                    closed = true;
+                    break;
                 }
-                return;
-            };
 
-            log.debug("read {} bytes data from fd {}", .{ nbytes, fd });
+                if (reader.feed(chunk[0..nbytes])) updated = true;
+                if (nbytes < chunk.len) break;
+            }
 
-            if (nbytes > 0) {
-                if (nbytes < dest_buf.len) {
-                    dest_buf[nbytes] = 0;
-                }
+            // A writer that exited mid-line still meant what it wrote.
+            if (closed and reader.flush()) updated = true;
 
+            if (updated) {
                 var show_bar_num: u8 = 0;
                 var it = self.outputs.safeIterator(.forward);
                 while (it.next()) |output| {
@@ -465,9 +482,9 @@ pub fn update_bar_status(self: *Self) void {
                 }
 
                 if (show_bar_num > 0) self.rwm.manageDirty();
-            } else {
-                self.stop_listening_status();
             }
+
+            if (closed) self.stop_listening_status();
         } else {
             log.warn("call `update_bar_status` while bar_status_fd is null", .{});
         }
