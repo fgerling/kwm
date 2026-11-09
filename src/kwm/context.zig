@@ -48,6 +48,9 @@ init_env: *const process.Environ,
 config_path: []const u8,
 cfg: config.Config = undefined,
 config_arena: heap.ArenaAllocator,
+// the arena of the config replaced by a reload, freed in `prepare_manage`
+// once no queued action can point into it
+retired_config_arena: ?heap.ArenaAllocator = null,
 
 wl_registry: *wl.Registry,
 wl_compositor: *wl.Compositor,
@@ -271,6 +274,7 @@ pub fn deinit() void {
     ctx.startup_processes.deinit(ctx.gpa);
 
     ctx.config_arena.deinit();
+    if (ctx.retired_config_arena) |*arena| arena.deinit();
 }
 
 
@@ -318,8 +322,6 @@ pub fn reload_config(self: *Self) void {
         arena.deinit();
         return;
     };
-    self.config_arena.deinit();
-    self.config_arena = arena;
 
     log.debug("mask: {any}", .{ mask });
 
@@ -333,19 +335,30 @@ pub fn reload_config(self: *Self) void {
     //     self.run_startup_cmds();
     // }
 
-    if (mask.xcursor_theme or mask.bindings) {
+    // Bindings hold slices into the config they were created from, and the old
+    // config is freed after this reload, so recreate them even if unchanged.
+    {
         var it = self.seats.safeIterator(.forward);
         while (it.next()) |seat| {
             if (mask.xcursor_theme) {
                 seat.refresh_xursor_theme();
             }
-            if (mask.bindings) {
-                seat.clear_bindings();
-                seat.create_bindings();
-                seat.mode = null;
-            }
+            seat.clear_bindings();
+            seat.create_bindings();
+            seat.mode = null;
         }
     }
+
+    // Actions queued on the seats were copied from the old bindings, so the old
+    // arena lives until every seat has handled them. If a reload already
+    // happened in this manage sequence, the queued actions point into the arena
+    // it retired, and nothing points into the current one.
+    if (self.retired_config_arena == null) {
+        self.retired_config_arena = self.config_arena;
+    } else {
+        self.config_arena.deinit();
+    }
+    self.config_arena = arena;
 
     if (mask.window_rules) {
         var it = self.windows.safeIterator(.forward);
@@ -1137,6 +1150,13 @@ fn prepare_manage(self: *Self) void {
         while (it.next()) |seat| {
             seat.manage();
         }
+    }
+
+    // every seat has handled its queued actions, nothing points into the
+    // config replaced by a reload any more
+    if (self.retired_config_arena) |*arena| {
+        arena.deinit();
+        self.retired_config_arena = null;
     }
 
     {

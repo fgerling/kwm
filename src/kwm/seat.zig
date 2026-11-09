@@ -434,6 +434,8 @@ pub fn clear_bindings(self: *Self) void {
         var it = self.xkb_bindings.iterator();
         while (it.next()) |pair| {
             for (pair.value_ptr.items) |xkb_binding| {
+                // key repeat keeps a pointer to the binding it repeats
+                if (ctx.key_repeat) |*key_repeat| key_repeat.stop(xkb_binding);
                 xkb_binding.destroy();
             }
             pair.value_ptr.deinit(ctx.gpa);
